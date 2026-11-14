@@ -1,0 +1,5 @@
+# Supabase CLI 最小配置（用于 `supabase functions deploy`）
+project_id = "bpgomdtbxqiwbdfoistz"
+
+[functions.change-login-id]
+verify_jwt = true

@@ -1,0 +1,8 @@
+default/node_modules/
+default/backup/
+default/screenshots/
+default/.trae-html-share-packages/
+default/joson历史文件/
+default/*.code-workspace
+/supabase/.temp/
+/supabase/.temp/**

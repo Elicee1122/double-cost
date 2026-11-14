@@ -332,6 +332,33 @@ html.overlay-open body{overflow:hidden}
 
 /* backup grid */
 .backup-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+/* ===== 登录（阶段 2） ===== */
+body:not(.authed) .app{display:none}
+.login{position:fixed;inset:0;z-index:300;display:none;align-items:center;justify-content:center;
+  padding:24px;background:rgba(255,249,249,.92);
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.login.show{display:flex}
+.login-card{width:100%;max-width:330px;padding:26px 22px 20px;border-radius:24px;
+  background:var(--glass);border:1px solid var(--border);
+  box-shadow:0 18px 44px rgba(58,58,56,.12);
+  backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+.login-title{font-family:var(--font-cute);font-size:26px;color:var(--accent-ink);
+  text-align:center;letter-spacing:1px}
+.login-sub{margin:6px 0 16px;text-align:center;font-size:13px;color:var(--text-3)}
+.login-label{display:block;margin:12px 0 6px;font-size:13px;color:var(--text-2)}
+.login-input{width:100%;height:46px;padding:0 14px;border-radius:14px;font-size:16px;
+  border:1px solid var(--border-2);background:rgba(255,255,255,.75);color:var(--text);
+  outline:none;-webkit-appearance:none;appearance:none}
+.login-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.login-input[disabled]{opacity:.55}
+#login-id{letter-spacing:2px;font-size:18px}
+.login-err{min-height:18px;margin:10px 2px 0;font-size:12px;color:var(--danger);line-height:1.4}
+.login-btn{width:100%;height:48px;margin-top:8px;border:0;border-radius:16px;font-size:16px;
+  font-weight:600;color:#fff;background:var(--accent);font-family:var(--font-cute);
+  box-shadow:0 8px 20px rgba(108,161,155,.28);-webkit-appearance:none;appearance:none}
+.login-btn:disabled{opacity:.6}
+.login-tip{margin:14px 0 0;text-align:center;font-size:11px;color:var(--text-3)}
 </style>
 </head>
 <body>
@@ -344,6 +371,27 @@ html.overlay-open body{overflow:hidden}
 </div>
 <div id="overlay-root"></div>
 <div id="toast-root"></div>
+
+<!-- ===== 登录屏（未登录时遮住整个应用） ===== -->
+<div id="login" class="login">
+  <form id="login-form" class="login-card" novalidate>
+    <div class="login-title">双人记账</div>
+    <p class="login-sub">请输入账号与密码</p>
+    <label class="login-label" for="login-id">数字账号</label>
+    <input id="login-id" class="login-input" type="text" inputmode="numeric"
+           autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false"
+           placeholder="10001">
+    <label class="login-label" for="login-pw">密码</label>
+    <input id="login-pw" class="login-input" type="password" autocomplete="current-password"
+           placeholder="请输入密码">
+    <p id="login-err" class="login-err" role="alert"></p>
+    <button id="login-btn" class="login-btn" type="submit">登录</button>
+    <p class="login-tip">账号由管理员创建，不支持自助注册</p>
+  </form>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="supabase/config.js"></script>
 <script>
 'use strict';
 const $ = (sel) => document.querySelector(sel);
@@ -415,14 +463,21 @@ const mkLabel = (mk)=>{ const [y,m] = mk.split('-').map(Number); return `${y}年
 const fmDay = (iso)=>{ const [y,m,d] = iso.split('-').map(Number); return `${m}月${d}日`; };
 
 // ===== 存储 =====
+let _bills = null;  // 内存缓存，避免每次 getter 都读 localStorage 并过滤
 const store = {
   get bills(){
-    let raw;
-    try{ raw=JSON.parse(localStorage.getItem(LS+'b')||'[]'); }catch(e){ raw=[]; }
-    if(!Array.isArray(raw)) return [];
-    return raw.filter(b=>b && typeof b==='object' && LEDGER_MAP[b.ledger] && b.date);
+    if(_bills===null){
+      let raw;
+      try{ raw=JSON.parse(localStorage.getItem(LS+'b')||'[]'); }catch(e){ raw=[]; }
+      if(!Array.isArray(raw)) raw=[];
+      _bills = raw.filter(b=>b && typeof b==='object' && LEDGER_MAP[b.ledger] && b.date);
+    }
+    return _bills;
   },
-  set bills(v){ localStorage.setItem(LS+'b',JSON.stringify(v)); },
+  set bills(v){
+    _bills = Array.isArray(v) ? v : [];
+    localStorage.setItem(LS+'b',JSON.stringify(_bills));
+  },
   get names(){
     try{ return JSON.parse(localStorage.getItem(LS+'n')||'{"A":"A","B":"B"}'); }
     catch(e){ return {A:'A',B:'B'}; }
@@ -457,6 +512,8 @@ const setBudgetOverride=(lk,refIso,amount)=>{
   const o=getBudgetOverrides(), k=budgetOverrideKey(lk,refIso);
   if(amount==null) delete o[k]; else o[k]=amount;
   localStorage.setItem(LS+'pb',JSON.stringify(o));
+  const pk = k.slice(k.indexOf('|')+1);
+  syncBudgetOverride(lk, pk, amount);
 };
 const effectiveBudget=(lk,refIso=today())=>{
   const v=getBudgetOverrides()[budgetOverrideKey(lk,refIso)];
@@ -604,7 +661,8 @@ function renderHome(view){
   const grd=new Date().getHours();
   const greet=grd<6?'夜深了':grd<11?'早上好':grd<14?'中午好':grd<18?'下午好':'晚上好';
   const head=document.createElement('header'); head.className='page-head';
-  head.innerHTML=`<div><p class="eyebrow">${greet}</p><h1>双人记账</h1></div>`;
+  head.innerHTML=`<div><p class="eyebrow">${greet}</p><h1></h1></div>`;
+  head.querySelector('h1').textContent = ME.name || '双人记账';
   view.appendChild(head);
 
   // 记一笔主按钮
@@ -908,10 +966,12 @@ function openAddBill(defaultLedger){
       payer: l.aa?payer:(lk==='personal_A'?'A':'B'),
     };
     const list=store.bills;
-    list.unshift({...b, id:P(), createdAt:Date.now()});
+    const newBill={...b, id:P(), createdAt:Date.now()};
+    list.unshift(newBill);
     store.bills=list;
     toast('已保存'); close();
     render();
+    syncBillUpsert(newBill);
   };
   body.appendChild(errEl); body.appendChild(saveBtn);
 
@@ -984,10 +1044,12 @@ function openEditBill(bill){
     if(i<0){ toast('账单不存在'); return; }
     const newLk=ledgerSel.value;
     const newL=LEDGER_MAP[newLk];
-    list[i]={...list[i], ledger:newLk, category:catSel.value, amount:amt,
+    const updated={...list[i], ledger:newLk, category:catSel.value, amount:amt,
       note:noteInput.value.trim().slice(0,40), date:dateInput.value,
       payer: newL.aa?payer:(newLk==='personal_A'?'A':'B')};
+    list[i]=updated;
     store.bills=list; toast('已保存'); close(); render();
+    syncBillUpsert(updated);
   };
   const delBtn=document.createElement('button'); delBtn.className='btn btn-danger btn-full'; delBtn.textContent='删除';
   delBtn.onclick=async ()=>{
@@ -995,6 +1057,7 @@ function openEditBill(bill){
     if(!ok) return;
     store.bills=store.bills.filter(x=>x.id!==bill.id);
     toast('已删除'); close(); render();
+    syncBillDelete(bill);
   };
   body.appendChild(saveBtn);
   body.appendChild(Object.assign(document.createElement('div'),{className:'form-footer-extra'}));
@@ -1311,17 +1374,35 @@ function renderSettings(view){
 
   const names=store.names;
 
-  // 名字
+  // 名字（云端 profiles，只能改自己那一行）
+  const mySlot = ME.slot==='B' ? 'B' : 'A';
   const c1=document.createElement('div'); c1.className='card';
-  c1.innerHTML=`<div class="card-title">修改称呼</div>`;
+  c1.innerHTML=`<div class="card-title">修改称呼</div>
+    <p class="card-sub">只能修改自己的昵称，保存后写入云端；对方的昵称由对方账号修改</p>`;
   const aInp=document.createElement('input'); aInp.className='text-input'; aInp.value=names.A;
   const bInp=document.createElement('input'); bInp.className='text-input'; bInp.value=names.B;
   c1.appendChild(makeField(makeLabel('A 的称呼'), aInp));
   c1.appendChild(makeField(makeLabel('B 的称呼'), bInp));
+  const myInp = mySlot==='A' ? aInp : bInp;
+  const otherInp = mySlot==='A' ? bInp : aInp;
+  otherInp.disabled = true;
   const saveNameBtn=document.createElement('button'); saveNameBtn.className='btn btn-primary btn-full'; saveNameBtn.textContent='保存';
-  saveNameBtn.onclick=()=>{
-    const a=aInp.value.trim().slice(0,8)||'A'; const b=bInp.value.trim().slice(0,8)||'B';
-    store.names={A:a,B:b}; applySettings(); toast('已保存'); render();
+  saveNameBtn.onclick=async()=>{
+    const val=myInp.value.trim().slice(0,8)||mySlot;
+    if(val===(names[mySlot]||mySlot)){ toast('称呼未修改'); return; }
+    saveNameBtn.disabled=true; saveNameBtn.textContent='保存中…';
+    try{
+      const {error}=await sbClient().from('profiles').update({display_name:val}).eq('id',ME.uid);
+      if(error) throw error;
+      ME.name=val;
+      await loadProfiles();
+      toast('已保存到云端');
+      render();
+    }catch(ex){
+      toast('保存失败：'+((ex&&ex.message)||'请稍后重试'));
+    }finally{
+      saveNameBtn.disabled=false; saveNameBtn.textContent='保存';
+    }
   };
   c1.appendChild(saveNameBtn);
   view.appendChild(c1);
@@ -1348,8 +1429,7 @@ function renderSettings(view){
   }
   const saveBudBtn=document.createElement('button'); saveBudBtn.className='btn btn-primary btn-full'; saveBudBtn.textContent='保存预算';
   saveBudBtn.onclick=()=>{
-    // 当前版本预算写死在代码里，修改需要在代码层面改 LEDGERS 常量
-    // 这里我们用 localStorage 覆盖实现可配置预算
+    // 预算写死在代码里，用 localStorage 覆盖实现可配置，并后台同步到云端
     let changed=false;
     const budgets=JSON.parse(localStorage.getItem(LS+'budgets')||'{}');
     for(const e of edits){
@@ -1358,7 +1438,10 @@ function renderSettings(view){
       budgets[e.lk]=n;
       changed=true;
     }
-    if(changed){ localStorage.setItem(LS+'budgets',JSON.stringify(budgets)); applySettings(); toast('已保存'); render(); }
+    if(changed){
+      localStorage.setItem(LS+'budgets',JSON.stringify(budgets)); applySettings(); toast('已保存'); render();
+      for(const e of edits) syncDefaultBudget(e.lk, Number(budgets[e.lk]));
+    }
   };
   c2.appendChild(saveBudBtn);
   view.appendChild(c2);
@@ -1371,8 +1454,10 @@ function renderSettings(view){
       <button class="btn btn-ghost" id="ex-json">导出 JSON</button>
       <button class="btn btn-ghost" id="ex-csv">导出 CSV</button>
     </div>
-    <button class="btn btn-ghost btn-full" id="im-json" style="margin-top:10px">从 JSON 恢复</button>`;
+    <button class="btn btn-ghost btn-full" id="im-json" style="margin-top:10px">从 JSON 恢复</button>
+    <button class="btn btn-primary btn-full" id="migrate-cloud" style="margin-top:10px">迁移到云端</button>`;
   view.appendChild(c3);
+  c3.querySelector('#migrate-cloud').onclick=()=>openMigrateSheet();
   c3.querySelector('#ex-json').onclick=()=>{
     const all=store.bills;
     download(`双人记账-${today()}.json`, JSON.stringify({
@@ -1425,11 +1510,25 @@ function renderSettings(view){
   const c4=document.createElement('div'); c4.className='card';
   c4.innerHTML=`<div class="card-title">关于</div>
     <p class="card-sub" style="margin-top:8px">
-      数据保存在本机浏览器，不会上传任何服务器。<br>
-      换手机或清浏览器缓存会丢数据，请定期导出 JSON。<br>
+      账号、昵称、账单与预算均保存在云端，登录后自动同步。<br>
+      建议定期导出 JSON 备份，双保险更安心。<br>
       支持 iPhone Safari 添加到主屏幕，像 App 一样用。
     </p>`;
   view.appendChild(c4);
+
+  // 当前账号 / 修改账号 / 退出登录
+  const c5=document.createElement('div'); c5.className='card';
+  const c5t=document.createElement('div'); c5t.className='card-title'; c5t.textContent='当前账号';
+  const c5s=document.createElement('p'); c5s.className='card-sub';
+  c5s.textContent = `登录账号 ${ME.loginId||'-'} · 身份 ${ME.slot||'-'} · 昵称 ${ME.name||'-'}`;
+  const c5n=document.createElement('p'); c5n.className='card-sub';
+  c5n.textContent = '数据云端同步';
+  const changeBtn=document.createElement('button'); changeBtn.className='btn btn-full'; changeBtn.textContent='修改登录账号';
+  changeBtn.onclick=()=>openChangeIdSheet();
+  const outBtn=document.createElement('button'); outBtn.className='btn btn-full'; outBtn.textContent='退出登录';
+  outBtn.onclick=async()=>{ outBtn.disabled=true; outBtn.textContent='退出中…'; await signOutNow(); };
+  c5.append(c5t, c5s, c5n, changeBtn, outBtn);
+  view.appendChild(c5);
 
   view.appendChild(document.createElement('div')).className='bottom-space';
 }
@@ -1446,6 +1545,267 @@ function applySettings(){
   LEDGER_MAP.personal_B.name = `${nm.B} 个人消费`;
 }
 applySettings();
+
+// ===== 云端数据同步（本地优先、后台同步） =====
+const cloudToBill = (row)=>({
+  id: String(row.legacy_id || row.id),
+  ledger: row.ledger_key,
+  category: row.category || '',
+  amount: Number(row.amount),
+  note: row.note || '',
+  date: row.bill_date,
+  payer: row.payer,
+  createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+});
+const billToCloud = (b)=>({
+  household_id: ME.household,
+  ledger_key: b.ledger,
+  category: b.category || '其他',
+  amount: Number(b.amount),
+  note: b.note || '',
+  bill_date: b.date,
+  payer: b.payer,
+  legacy_id: String(b.id),
+});
+const isDupErr = (e)=>/duplicate|unique|23505/i.test(String(e&&e.message||'')+String(e&&e.code||''));
+
+// 账单新增/编辑：本地先更新，随后后台 upsert（按 household_id+legacy_id 定位）
+async function syncBillUpsert(bill){
+  if(!ME.household || !bill || !bill.id) return;
+  try{
+    const {error} = await sbClient().from('bills').upsert(
+      billToCloud(bill), { onConflict:'household_id,legacy_id' }
+    );
+    if(error && !isDupErr(error)) toast('账单云端同步失败：'+(error.message||''));
+  }catch(e){ toast('账单云端同步失败：'+((e&&e.message)||'')); }
+}
+async function syncBillDelete(bill){
+  if(!ME.household || !bill || !bill.id) return;
+  try{
+    const {error} = await sbClient().from('bills').delete().eq('legacy_id', String(bill.id));
+    if(error) toast('账单云端删除失败：'+(error.message||''));
+  }catch(e){ toast('账单云端删除失败：'+((e&&e.message)||'')); }
+}
+async function syncDefaultBudget(lk, amount){
+  if(!ME.household) return;
+  try{
+    const {error} = await sbClient().from('ledger_budgets').upsert(
+      { household_id:ME.household, ledger_key:lk, amount:Number(amount) },
+      { onConflict:'household_id,ledger_key' }
+    );
+    if(error) toast('预算云端同步失败：'+(error.message||''));
+  }catch(e){ toast('预算云端同步失败：'+((e&&e.message)||'')); }
+}
+async function syncBudgetOverride(lk, periodKey, amount){
+  if(!ME.household) return;
+  try{
+    if(amount==null){
+      const {error} = await sbClient().from('budget_overrides')
+        .delete().eq('household_id',ME.household).eq('ledger_key',lk).eq('period_key',periodKey);
+      if(error) toast('预算恢复同步失败：'+(error.message||''));
+    }else{
+      const {error} = await sbClient().from('budget_overrides').upsert(
+        { household_id:ME.household, ledger_key:lk, period_key:periodKey, amount:Number(amount) },
+        { onConflict:'household_id,ledger_key,period_key' }
+      );
+      if(error) toast('预算调整同步失败：'+(error.message||''));
+    }
+  }catch(e){ toast('预算调整同步失败：'+((e&&e.message)||'')); }
+}
+
+// 登录后拉取云端账单 / 默认预算 / 预算覆盖，合并进本地缓存
+async function pullCloudData(){
+  if(!ME.household) return;
+  const db = sbClient();
+  const [bRes, budRes, ovRes] = await Promise.all([
+    db.from('bills').select('*').eq('household_id', ME.household),
+    db.from('ledger_budgets').select('ledger_key,amount').eq('household_id', ME.household),
+    db.from('budget_overrides').select('ledger_key,period_key,amount').eq('household_id', ME.household),
+  ]);
+  if(bRes.error) throw new Error('账单读取失败：'+bRes.error.message);
+  if(budRes.error) throw new Error('预算读取失败：'+budRes.error.message);
+  if(ovRes.error) throw new Error('预算调整读取失败：'+ovRes.error.message);
+
+  // 账单：云端为主，保留本地尚未同步的新增（按 legacy_id 去重）
+  const cloudBills = (bRes.data||[]).map(cloudToBill);
+  const cloudIds = new Set(cloudBills.map(x=>String(x.id)));
+  const localOnly = store.bills.filter(b=>!cloudIds.has(String(b.id)));
+  const merged = [...cloudBills, ...localOnly].sort((a,b)=>{
+    if(a.date!==b.date) return a.date>b.date?-1:1;
+    return (b.createdAt||0)-(a.createdAt||0);
+  });
+  store.bills = merged;
+
+  // 默认预算：云端有的用云端，云端缺的保留本地
+  let budgets={};
+  try{ budgets=JSON.parse(localStorage.getItem(LS+'budgets')||'{}'); }catch(e){ budgets={}; }
+  for(const r of (budRes.data||[])) budgets[r.ledger_key] = Number(r.amount);
+  localStorage.setItem(LS+'budgets', JSON.stringify(budgets));
+
+  // 预算覆盖：同上，云端为主、本地补缺
+  let overrides={};
+  try{ overrides=JSON.parse(localStorage.getItem(LS+'pb')||'{}'); }catch(e){ overrides={}; }
+  for(const r of (ovRes.data||[])) overrides[r.ledger_key+'|'+r.period_key] = Number(r.amount);
+  localStorage.setItem(LS+'pb', JSON.stringify(overrides));
+
+  applySettings();
+}
+
+// 昵称迁移：本地 dl.v2n 有自定义昵称、而云端为空时，把本账号昵称推到云端
+async function migrateMyNickname(){
+  if(!ME.uid || !ME.slot) return;
+  const slot = ME.slot==='B' ? 'B' : 'A';
+  if(ME.name && ME.name!==slot) return;  // 云端已有昵称，不覆盖
+  let local={};
+  try{ local=JSON.parse(localStorage.getItem(LS+'n')||'{}'); }catch(e){ local={}; }
+  const localName = (local && typeof local[slot]==='string') ? local[slot].trim() : '';
+  if(!localName || localName===slot) return;  // 本地也没有自定义昵称
+  try{
+    const name = localName.slice(0,8);
+    const {error} = await sbClient().from('profiles').update({display_name:name}).eq('id', ME.uid);
+    if(!error) ME.name = name;
+  }catch(e){ /* 迁移失败不阻塞登录 */ }
+}
+
+// ===== 迁移到云端：读取本地账单/预算/预算调整，预览后按需写入 Supabase =====
+async function openMigrateSheet(){
+  let db;
+  try{ db=sbClient(); }catch(e){ toast(e.message); return; }
+  if(!ME.household){ toast('当前账号尚未绑定家庭空间'); return; }
+
+  // 读取本地原始数据（不过滤，异常记录也在预览中标出）
+  let bills=[], overrides={};
+  try{ bills=JSON.parse(localStorage.getItem(LS+'b')||'[]'); }catch(e){ bills=[]; }
+  if(!Array.isArray(bills)) bills=[];
+  try{ overrides=JSON.parse(localStorage.getItem(LS+'pb')||'{}'); }catch(e){ overrides={}; }
+
+  const { close, body } = openSheet({ title:'迁移到云端', subtitle:'正在比对本地与云端数据…' });
+  const loading=document.createElement('p'); loading.className='card-sub'; body.appendChild(loading);
+
+  // 读取云端已有数据，用于区分新增 / 重复
+  let cloudBills, cloudBudgets, cloudOverrides;
+  try{
+    loading.textContent='正在读取云端账单…';
+    const [bRes, budRes, ovRes] = await Promise.all([
+      db.from('bills').select('legacy_id').eq('household_id', ME.household),
+      db.from('ledger_budgets').select('ledger_key').eq('household_id', ME.household),
+      db.from('budget_overrides').select('ledger_key,period_key').eq('household_id', ME.household),
+    ]);
+    if(bRes.error) throw new Error('账单表读取失败：'+bRes.error.message);
+    if(budRes.error) throw new Error('预算表读取失败：'+budRes.error.message);
+    if(ovRes.error) throw new Error('预算调整表读取失败：'+ovRes.error.message);
+    cloudBills = new Set((bRes.data||[]).map(x=>x.legacy_id).filter(Boolean));
+    cloudBudgets = new Set((budRes.data||[]).map(x=>x.ledger_key));
+    cloudOverrides = new Set((ovRes.data||[]).map(x=>x.ledger_key+'|'+x.period_key));
+  }catch(e){ loading.textContent='比对失败：'+(e.message||'请重试'); return; }
+
+  // 分类账单
+  const billNew=[], billDup=[], billBad=[];
+  for(const b of bills){
+    if(!b || typeof b!=='object'){ billBad.push(b); continue; }
+    const amt=Number(b.amount);
+    if(!LEDGER_MAP[b.ledger] || !(Number.isFinite(amt)&&amt>0) ||
+       typeof b.date!=='string' || !/^\d{4}-\d{2}-\d{2}$/.test(b.date) ||
+       (b.payer!=='A'&&b.payer!=='B') || !b.id){ billBad.push(b); continue; }
+    if(cloudBills.has(String(b.id))) billDup.push(b); else billNew.push(b);
+  }
+  // 分类预算（默认预算：LEDGER_MAP 已含本地覆盖值）
+  const budNew=[], budDup=[];
+  for(const l of LEDGERS){
+    const amt=Number(l.budget);
+    if(!(Number.isFinite(amt)&&amt>0)) continue;
+    if(cloudBudgets.has(l.key)) budDup.push({ledger_key:l.key, name:l.name, amount:amt});
+    else budNew.push({ledger_key:l.key, name:l.name, amount:amt});
+  }
+  // 分类预算调整
+  const ovNew=[], ovDup=[], ovBad=[];
+  for(const k in overrides){
+    const idx=k.lastIndexOf('|');
+    if(idx<=0){ ovBad.push(k); continue; }
+    const lk=k.slice(0,idx), pk=k.slice(idx+1);
+    const amt=Number(overrides[k]);
+    if(!LEDGER_MAP[lk] || !(Number.isFinite(amt)&&amt>0)){ ovBad.push(k); continue; }
+    if(cloudOverrides.has(lk+'|'+pk)) ovDup.push({ledger_key:lk,period_key:pk,amount:amt});
+    else ovNew.push({ledger_key:lk,period_key:pk,amount:amt});
+  }
+
+  // 渲染预览
+  body.innerHTML='';
+  const head=document.createElement('p'); head.className='card-sub';
+  head.textContent='确认后才写入云端，本地数据不会被删除或清空。';
+  body.appendChild(head);
+  const box=document.createElement('div');
+  box.style.cssText='max-height:44vh;overflow:auto;margin:8px 0;font-size:13px;line-height:1.8';
+  const line=(label,n,color)=>{
+    const d=document.createElement('div'); d.style.cssText='display:flex;justify-content:space-between;padding:1px 0';
+    d.innerHTML=`<span>${label}</span><span style="color:${color};font-weight:600">${n}</span>`;
+    return d;
+  };
+  box.appendChild(line('账单 · 新增', billNew.length, '#22a06b'));
+  box.appendChild(line('账单 · 已存在（跳过）', billDup.length, '#8a8f98'));
+  box.appendChild(line('账单 · 异常（跳过）', billBad.length, '#e5484d'));
+  box.appendChild(line('默认预算 · 新增', budNew.length, '#22a06b'));
+  box.appendChild(line('默认预算 · 已存在（跳过）', budDup.length, '#8a8f98'));
+  box.appendChild(line('预算调整 · 新增', ovNew.length, '#22a06b'));
+  box.appendChild(line('预算调整 · 已存在（跳过）', ovDup.length, '#8a8f98'));
+  box.appendChild(line('预算调整 · 异常（跳过）', ovBad.length, '#e5484d'));
+  body.appendChild(box);
+
+  const total = billNew.length + budNew.length + ovNew.length;
+  const btn=document.createElement('button'); btn.className='btn btn-primary btn-full';
+  btn.textContent = total>0 ? `确认导入 ${total} 条` : '没有需要导入的数据';
+  btn.disabled = total===0;
+  const err=document.createElement('p');
+  err.style.cssText='min-height:16px;font-size:12px;color:#e5484d;margin-top:4px';
+  body.appendChild(btn); body.appendChild(err);
+
+  btn.onclick=async()=>{
+    btn.disabled=true; btn.textContent='导入中…';
+    let ok=0, dup=0, fail=0; const fails=[];
+    const addFail=(label,msg)=>{ fail++; if(fails.length<8) fails.push(label+'：'+msg); };
+    const isDup=(e)=>/duplicate|unique|23505/i.test(String(e&&e.message||'')+String(e&&e.code||''));
+
+    // 账单（逐条 insert，legacy_id 去重；created_by=当前登录用户）
+    for(const b of billNew){
+      try{
+        const {error}=await db.from('bills').insert({
+          household_id: ME.household, ledger_key: b.ledger, category: b.category||'其他',
+          amount: Number(b.amount), note: b.note||'', bill_date: b.date, payer: b.payer,
+          legacy_id: String(b.id), created_by: ME.uid,
+          created_at: b.createdAt ? new Date(Number(b.createdAt)).toISOString() : new Date().toISOString(),
+        });
+        if(error){ if(isDup(error)) dup++; else addFail('账单 '+b.date+' '+(b.note||b.category||''), error.message); }
+        else ok++;
+      }catch(e){ addFail('账单 '+(b.date||''), e.message||'异常'); }
+    }
+    // 默认预算
+    for(const b of budNew){
+      try{
+        const {error}=await db.from('ledger_budgets').insert({ household_id:ME.household, ledger_key:b.ledger_key, amount:b.amount });
+        if(error){ if(isDup(error)) dup++; else addFail('预算 '+b.name, error.message); }
+        else ok++;
+      }catch(e){ addFail('预算 '+(b.name||''), e.message||'异常'); }
+    }
+    // 预算调整
+    for(const b of ovNew){
+      try{
+        const {error}=await db.from('budget_overrides').insert({ household_id:ME.household, ledger_key:b.ledger_key, period_key:b.period_key, amount:b.amount });
+        if(error){ if(isDup(error)) dup++; else addFail('预算调整 '+b.ledger_key+' '+b.period_key, error.message); }
+        else ok++;
+      }catch(e){ addFail('预算调整 '+b.period_key, e.message||'异常'); }
+    }
+
+    btn.textContent='完成';
+    const sum=document.createElement('div'); sum.className='card-sub'; sum.style.marginTop='4px';
+    sum.innerHTML=`成功 ${ok} 条 · 跳过（已存在）${dup} 条 · 失败 ${fail} 条`;
+    err.textContent='';
+    const failBox=document.createElement('div');
+    failBox.style.cssText='font-size:12px;color:#e5484d;margin-top:4px;line-height:1.6;white-space:pre-wrap';
+    failBox.textContent = fails.length ? ('失败原因：\n'+fails.join('\n')) : '';
+    body.appendChild(sum); body.appendChild(failBox);
+    if(fail>0 && ok>0) toast(`迁移完成：成功 ${ok} 条，失败 ${fail} 条`);
+  };
+}
 
 /* 把文本中所有数字（含 ¥ / 千分位 / 小数点）包成 .num，保证全站数字统一花体 */
 const NUM_RE=/[¥￥]?-?\d+(?:[.,]\d+)*/g;
@@ -1476,12 +1836,202 @@ function applyNumFont(root){
 }
 
 
+// ===== 登录与会话（阶段 2：Supabase Auth） =====
+const SB_DOMAIN = 'dl.example.com';
+const toEmail = (id) => id + '@' + SB_DOMAIN;      // 数字账号 → 虚拟邮箱，按字符串处理，保留前导零
+const ME = { uid:null, slot:null, name:null, household:null, loginId:null };
+let _sb = null;
+
+function sbClient(){
+  if(_sb) return _sb;
+  if(!window.supabase) throw new Error('Supabase SDK 加载失败，请检查网络后刷新');
+  const cfg = window.SB_CONFIG || {};
+  if(!cfg.url || !cfg.key || /PASTE|在此|请填写/.test(cfg.key)){
+    throw new Error('未配置 Supabase：请在 supabase/config.js 填入 URL 与 Publishable key');
+  }
+  _sb = window.supabase.createClient(cfg.url, cfg.key, {
+    auth:{ persistSession:true, autoRefreshToken:true, detectSessionInUrl:false }
+  });
+  return _sb;
+}
+
+// 拉取同空间两人的昵称，写回本地缓存供原有渲染逻辑使用
+async function loadProfiles(){
+  const {data,error} = await sbClient().from('profiles').select('slot,display_name').order('slot');
+  if(error) throw error;
+  const names = {A:'A', B:'B'};
+  for(const p of (data||[])){
+    if(p.slot==='A'||p.slot==='B') names[p.slot] = p.display_name || p.slot;
+  }
+  store.names = names;
+  applySettings();
+  return names;
+}
+
+async function applySession(user){
+  const {data,error} = await sbClient()
+    .from('profiles').select('slot,display_name,household_id').eq('id',user.id).maybeSingle();
+  if(error) throw error;
+  if(!data){
+    await sbClient().auth.signOut();
+    throw new Error('该账号尚未绑定账本档案，请让管理员在 Supabase 后台绑定');
+  }
+  ME.uid = user.id;
+  ME.slot = data.slot;
+  ME.name = data.display_name || data.slot;
+  ME.household = data.household_id;
+  ME.loginId = (user.email || '').split('@')[0];
+  await migrateMyNickname();       // 本地旧昵称 → 云端（仅本账号，云端为空才写）
+  await loadProfiles();            // 拉取两人昵称
+  try{ await pullCloudData(); }    // 登录后自动显示云端账单 / 预算
+  catch(e){ toast('云端数据拉取失败：'+((e&&e.message)||'请检查网络')); }
+  $('#login').classList.remove('show');
+  $('#login-err').textContent = '';
+  document.body.classList.add('authed');
+  render();
+}
+
+function showLogin(msg){
+  ME.uid=null; ME.slot=null; ME.name=null; ME.household=null; ME.loginId=null;
+  document.body.classList.remove('authed');
+  $('#login').classList.add('show');
+  $('#login-err').textContent = msg || '';
+}
+
+async function signOutNow(){
+  try{ await sbClient().auth.signOut(); }catch(e){ /* 忽略网络错误，本地照样退出 */ }
+  showLogin('');
+  const idInp=$('#login-id'); if(idInp) idInp.value='';
+  const pwInp=$('#login-pw'); if(pwInp) pwInp.value='';
+}
+
+function bindLoginForm(){
+  const form=$('#login-form');
+  if(!form || form.dataset.bound) return;
+  form.dataset.bound='1';
+  form.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const idInp=$('#login-id'), pwInp=$('#login-pw'), err=$('#login-err'), btn=$('#login-btn');
+    const id=(idInp.value||'').trim();
+    const pw=pwInp.value||'';
+    err.textContent='';
+    if(!/^\d+$/.test(id)){ err.textContent='账号只能是数字'; return; }
+    if(!pw){ err.textContent='请输入密码'; return; }
+    btn.disabled=true; btn.textContent='登录中…';
+    try{
+      const {data,error} = await sbClient().auth.signInWithPassword({ email:toEmail(id), password:pw });
+      if(error) throw new Error(error.message==='Invalid login credentials' ? '账号或密码不对' : error.message);
+      pwInp.value='';
+      await applySession(data.user);
+    }catch(ex){
+      err.textContent = (ex && ex.message) || '登录失败';
+    }finally{
+      btn.disabled=false; btn.textContent='登录';
+    }
+  });
+}
+
+// 修改登录账号：仅改 Supabase Auth 的 email（虚拟邮箱），不改 UID/household/slot/昵称/账单
+// 身份验证与改邮箱都在服务端 Edge Function 完成，前端不接触 service_role key
+function openChangeIdSheet(){
+  const { close, body } = openSheet({ title:'修改登录账号', subtitle:'账号为纯数字，可保留前导零；改完即可用新账号登录' });
+
+  const curLbl=makeLabel('当前账号');
+  const curInp=document.createElement('input'); curInp.className='text-input'; curInp.value=ME.loginId||'';
+  curInp.disabled=true;
+  body.appendChild(makeField(curLbl, curInp));
+
+  const newLbl=makeLabel('新的数字账号');
+  const newInp=document.createElement('input'); newInp.className='text-input';
+  newInp.setAttribute('inputmode','numeric'); newInp.placeholder='例如 2、0002、10001';
+  body.appendChild(makeField(newLbl, newInp));
+
+  const cfmLbl=makeLabel('确认新账号');
+  const cfmInp=document.createElement('input'); cfmInp.className='text-input';
+  cfmInp.setAttribute('inputmode','numeric'); cfmInp.placeholder='再输入一次新账号';
+  body.appendChild(makeField(cfmLbl, cfmInp));
+
+  const pwLbl=makeLabel('当前密码');
+  const pwInp=document.createElement('input'); pwInp.className='text-input'; pwInp.type='password';
+  pwInp.setAttribute('autocomplete','current-password'); pwInp.placeholder='用于验证身份';
+  body.appendChild(makeField(pwLbl, pwInp));
+
+  const err=document.createElement('p'); err.className='login-err'; err.style.minHeight='18px';
+  body.appendChild(err);
+
+  const btn=document.createElement('button'); btn.className='btn btn-primary btn-full'; btn.textContent='确认修改';
+  body.appendChild(btn);
+
+  btn.onclick=async()=>{
+    const newId=(newInp.value||'').trim();
+    const confirmId=(cfmInp.value||'').trim();
+    const password=pwInp.value||'';
+    err.textContent='';
+    if(!/^\d+$/.test(newId)){ err.textContent='账号只能是数字'; return; }
+    if(newId.length>20){ err.textContent='账号过长（最多 20 位）'; return; }
+    if(newId===ME.loginId){ err.textContent='新账号与当前账号相同'; return; }
+    if(newId!==confirmId){ err.textContent='两次输入的新账号不一致'; return; }
+    if(!password){ err.textContent='请输入当前密码'; return; }
+
+    btn.disabled=true; btn.textContent='提交中…';
+    try{
+      const { data:sd } = await sbClient().auth.getSession();
+      const token = sd && sd.session && sd.session.access_token;
+      if(!token) throw new Error('登录状态已失效，请重新登录');
+
+      const res = await fetch((window.SB_CONFIG.url).replace(/\/$/,'') + '/functions/v1/change-login-id', {
+        method:'POST',
+        headers:{ 'Authorization':'Bearer '+token, 'Content-Type':'application/json' },
+        body: JSON.stringify({ newId, confirmId, password })
+      });
+      let payload = null;
+      try{ payload = await res.json(); }catch(e){ payload = null; }
+
+      if(!res.ok){
+        const msg = (payload && payload.error) || (res.status===409 ? '该账号已被占用' : (res.status===403 ? '密码不对' : ('修改失败（' + res.status + '）')));
+        throw new Error(msg);
+      }
+
+      // 成功后刷新会话，让 user.email 更新为新的虚拟邮箱
+      await sbClient().auth.refreshSession();
+      const { data:nd } = await sbClient().auth.getSession();
+      const newEmail = nd && nd.session && nd.session.user && nd.session.user.email;
+      ME.loginId = newEmail ? newEmail.split('@')[0] : newId;
+      close();
+      toast('账号已改为 ' + ME.loginId);
+      render();
+    }catch(ex){
+      err.textContent = (ex && ex.message) || '修改失败，请稍后重试';
+    }finally{
+      btn.disabled=false; btn.textContent='确认修改';
+    }
+  };
+}
+
+async function bootAuth(){
+  bindLoginForm();
+  let client;
+  try{ client = sbClient(); }
+  catch(ex){ showLogin(ex.message); return; }
+  try{
+    const {data} = await client.auth.getSession();
+    const session = data && data.session;
+    if(session && session.user){ await applySession(session.user); }
+    else { showLogin(''); }
+    client.auth.onAuthStateChange((evt)=>{
+      if(evt==='SIGNED_OUT'){ showLogin(''); }
+    });
+  }catch(ex){
+    showLogin((ex && ex.message) || '登录状态读取失败');
+  }
+}
+
 // ===== 启动 =====
 // 局部更新（切月份/筛选等）后自动给新数字套花体
 const _viewEl=document.getElementById('view');
 new MutationObserver(()=>{ applyNumFont(_viewEl); }).observe(_viewEl,{childList:true,subtree:true});
 window.addEventListener('hashchange', onRouteChange);
-render();
+bootAuth();
 </script>
 </body>
 </html>
