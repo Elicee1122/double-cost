@@ -887,7 +887,7 @@ function openAddBill(defaultLedger){
     if(l.aa){
       aaHint.innerHTML=`${names.A} 和 ${names.B} AA 平摊，各承担 <b>${amt?CNY(r2(amt/2)):'—'}</b>`;
     } else {
-      aaHint.innerHTML=`<span style="color:${l.ink};font-weight:600">${l.name}</span>，只算${l.name.includes('A')?names.A:names.B}的账单`;
+      aaHint.innerHTML=`<span style="color:${l.ink};font-weight:600">${l.name}</span>，只算${l.key==='personal_A'?names.A:names.B}的账单`;
     }
   }
   function refreshCats(){
