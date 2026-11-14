@@ -90,7 +90,9 @@ html.overlay-open body{overflow:hidden}
 .ledger-card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
 .ledger-name{font-size:13px;font-weight:600;color:var(--ledger-ink)}
 .ledger-period{font-size:10px;color:var(--ledger-ink);opacity:.62;background:rgba(255,255,255,.5);
-  padding:2px 8px;border-radius:8px}
+  padding:2px 8px;border-radius:8px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.ledger-period::after{content:"✎";font-size:9px;margin-left:3px;opacity:.75}
+.ledger-budget.is-custom{opacity:.95;border-bottom:1px dashed currentColor}
 .ledger-amounts{display:flex;align-items:baseline;gap:5px;margin-bottom:8px}
 .ledger-spent{font-family:var(--font-num);font-size:20px;font-weight:700;
   color:var(--ledger-ink);letter-spacing:.2px;line-height:1.2}
@@ -103,6 +105,7 @@ html.overlay-open body{overflow:hidden}
 .bar-over i{background:var(--danger);opacity:1}
 .ledger-foot{display:flex;justify-content:space-between;margin-top:7px;font-size:11px;
   color:var(--ledger-ink);opacity:.68}
+.ledger-remain{font-family:var(--font-num);font-weight:700;letter-spacing:.2px}
 .ledger-new-tag{position:absolute;top:10px;right:12px;font-size:9px;background:var(--ledger-ink);color:#fff;
   padding:2px 5px;border-radius:4px;font-weight:600}
 
@@ -442,13 +445,32 @@ function sumBy(list, filter){
   }
   return r2(s);
 }
+// 本期预算覆盖：只改当周/当月，下期自动回到默认预算
+const budgetOverrideKey=(lk,refIso=today())=>{
+  const l=LEDGER_MAP[lk], r=periodRange(lk,refIso);
+  return lk+'|'+(l.period==='week'? r.start : r.start.slice(0,7));
+};
+const getBudgetOverrides=()=>{
+  try{ return JSON.parse(localStorage.getItem(LS+'pb')||'{}'); }catch(e){ return {}; }
+};
+const setBudgetOverride=(lk,refIso,amount)=>{
+  const o=getBudgetOverrides(), k=budgetOverrideKey(lk,refIso);
+  if(amount==null) delete o[k]; else o[k]=amount;
+  localStorage.setItem(LS+'pb',JSON.stringify(o));
+};
+const effectiveBudget=(lk,refIso=today())=>{
+  const v=getBudgetOverrides()[budgetOverrideKey(lk,refIso)];
+  return (Number.isFinite(v)&&v>0)? v : LEDGER_MAP[lk].budget;
+};
 function usage(ledgerKey, refIso=today()){
   const l = LEDGER_MAP[ledgerKey];
   const r = periodRange(ledgerKey, refIso);
   const spent = sumBy(store.bills, { start:r.start, end:r.end, ledger:ledgerKey });
-  const pct = l.budget>0 ? Math.min(100,Math.round((spent/l.budget)*100)) : 0;
-  return { ledger:ledgerKey, ...r, spent, budget:l.budget, pct, over:spent>l.budget,
-    remaining:r2(l.budget-spent), aaPerPerson: r2(l.aa?spent/2:0) };
+  const budget = effectiveBudget(ledgerKey, refIso);
+  const pct = budget>0 ? Math.min(100,Math.round((spent/budget)*100)) : 0;
+  return { ledger:ledgerKey, ...r, spent, budget, pct, over:spent>budget,
+    overridden: budget!==l.budget,
+    remaining:r2(budget-spent), aaPerPerson: r2(l.aa?spent/2:0) };
 }
 
 // ===== Toast / Sheet / Dialog =====
@@ -630,8 +652,11 @@ function renderLedgerCard(lk){
   card.style.setProperty('--ledger-bg',l.bg);
 
   let footer;
+  const remainHtml = u.over
+    ? `超支 <b class="ledger-remain">${CNY(-u.remaining)}</b>`
+    : `剩余 <b class="ledger-remain">${CNY(u.remaining)}</b>`;
   if(l.aa){
-    footer=`<span>AA 各承担 ${CNY(u.aaPerPerson)}</span>`;
+    footer=`<span>AA 各承担 ${CNY(u.aaPerPerson)}</span><span>${remainHtml}</span>`;
   } else {
     footer=`<span>剩余 ${u.over?'超支':CNY(u.remaining)}</span>`;
   }
@@ -644,15 +669,56 @@ function renderLedgerCard(lk){
     <div class="ledger-amounts">
       <span class="ledger-spent">${CNY(u.spent)}</span>
       <span class="ledger-divider">/</span>
-      <span class="ledger-budget">${CNY(l.budget)}</span>
+      <span class="ledger-budget${u.overridden?' is-custom':''}">${CNY(u.budget)}</span>
     </div>
     <div class="bar${u.over?' bar-over':''}"><i style="width:${u.pct}%"></i></div>
     <div class="ledger-foot">
       ${footer}
     </div>`;
 
+  card.querySelector('.ledger-period').onclick=e=>{ e.stopPropagation(); openBudgetSheet(lk); };
   card.onclick=()=>openAddBill(lk);
   return card;
+}
+
+// ===== 本期预算编辑 =====
+function openBudgetSheet(lk){
+  const l=LEDGER_MAP[lk], ref=today(), r=periodRange(lk,ref);
+  const cur=getBudgetOverrides()[budgetOverrideKey(lk,ref)];
+  const has=Number.isFinite(cur);
+  const {close, body}=openSheet({title:`${l.name} · ${l.period==='week'?'本周':'本月'}预算`});
+
+  const sub=document.createElement('p'); sub.className='calc-expr';
+  sub.textContent=`${r.start.slice(5).replace('-','/')} – ${r.end.slice(5).replace('-','/')}　默认 ¥${l.budget}`;
+
+  const inp=document.createElement('input');
+  inp.className='text-input'; inp.type='text'; inp.inputMode='decimal';
+  inp.style.cssText='text-align:center;font-family:var(--font-num);font-size:22px;font-weight:700;'+
+    'letter-spacing:.5px;margin:10px 0';
+  inp.value = has ? String(cur) : '';
+  inp.placeholder = String(l.budget);
+
+  const tip=document.createElement('p'); tip.className='calc-expr'; tip.style.marginBottom='12px';
+  tip.textContent = has ? '本期已单独调整，点下面可恢复默认' : '只影响本期，下期自动回到默认预算';
+
+  const save=document.createElement('button');
+  save.className='btn btn-primary btn-full'; save.textContent= has ? '保存本期预算' : '保存';
+  save.onclick=()=>{
+    const n=parseAmt(inp.value);
+    if(!n){ toast('请输入有效金额'); return; }
+    setBudgetOverride(lk,ref,n); close(); render(); toast('已保存本期预算');
+  };
+
+  body.appendChild(sub); body.appendChild(inp); body.appendChild(tip); body.appendChild(save);
+
+  if(has){
+    const reset=document.createElement('button');
+    reset.className='btn btn-ghost btn-full'; reset.style.marginTop='8px';
+    reset.textContent='恢复默认预算';
+    reset.onclick=()=>{ setBudgetOverride(lk,ref,null); close(); render(); toast('已恢复默认预算'); };
+    body.appendChild(reset);
+  }
+  setTimeout(()=>{ try{ inp.focus(); }catch(e){} },150);
 }
 
 // ===== 金额计算器 =====
