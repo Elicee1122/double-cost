@@ -169,6 +169,22 @@ html.overlay-open body{overflow:hidden}
 
 .aa-hint{text-align:center;margin:10px 0 0;font-size:13px;color:var(--text-3)}
 .aa-hint b{color:var(--accent);font-weight:600}
+
+/* 金额计算器 */
+.calc-wrap{margin:14px 0 0}
+.calc-expr{margin:0 0 10px;min-height:16px;text-align:center;font-size:12px;color:var(--text-3);
+  font-family:-apple-system,"SF Pro Text",system-ui,sans-serif;letter-spacing:.4px}
+.calc{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;
+  grid-template-areas:"kc kb kd km" "k7 k8 k9 ks" "k4 k5 k6 ka" "k1 k2 k3 ke" "k0 k0 kz ke"}
+.calc button{height:42px;padding:0;border:var(--white-edge);border-radius:var(--radius-sm);
+  background:rgba(255,255,255,.6);-webkit-backdrop-filter:var(--glass-blur);backdrop-filter:var(--glass-blur);
+  color:var(--text);font-family:var(--font-num);font-size:22px;font-weight:600;
+  display:flex;align-items:center;justify-content:center;
+  transition:transform .08s,background .12s;-webkit-tap-highlight-color:transparent}
+.calc button:active{transform:scale(.95);background:#fff}
+.calc button.op{font-family:-apple-system,"SF Pro Text",system-ui,sans-serif;font-size:20px;color:var(--accent)}
+.calc button.fn{font-family:-apple-system,"SF Pro Text",system-ui,sans-serif;font-size:16px;color:var(--text-2)}
+.calc button.eq{background:var(--accent);color:#fff;font-family:-apple-system,"SF Pro Text",system-ui,sans-serif;font-size:22px}
 .form-error{margin:0;font-size:13px;color:var(--danger);min-height:18px;text-align:center}
 .form-disclaimer{margin:14px 0 0;font-size:11px;color:var(--text-3);text-align:center;line-height:1.6}
 .form-footer-extra{height:12px}
@@ -638,6 +654,91 @@ function renderLedgerCard(lk){
   return card;
 }
 
+// ===== 金额计算器 =====
+function buildCalc(amtInput,onChange){
+  const el=document.createElement('div'); el.className='calc-wrap';
+  const exprEl=document.createElement('p'); exprEl.className='calc-expr';
+  const padEl=document.createElement('div'); padEl.className='calc';
+  let acc=null, op=null, cur='', lastLine='';
+  const KEYS=[
+    ['C','kc','fn'],['⌫','kb','fn'],['÷','kd','op'],['×','km','op'],
+    ['7','k7',''],['8','k8',''],['9','k9',''],['−','ks','op'],
+    ['4','k4',''],['5','k5',''],['6','k6',''],['+','ka','op'],
+    ['1','k1',''],['2','k2',''],['3','k3',''],['=','ke','eq'],
+    ['0','k0',''],['.','kz','']
+  ];
+  const calc=(a,o,b)=>{
+    if(o==='+') return r2(a+b);
+    if(o==='−') return r2(a-b);
+    if(o==='×') return r2(a*b);
+    if(o==='÷') return b?r2(a/b):null;
+    return a;
+  };
+  const fmt=(n)=>String(r2(n));
+  function total(){
+    if(cur!==''){ const n=parseFloat(cur); return op!=null?calc(acc,op,n):n; }
+    return acc;
+  }
+  function render(){
+    const v=total();
+    amtInput.value=(v!=null&&Number.isFinite(v))?fmt(v):'';
+    if(op!=null){
+      const pv=cur!==''?calc(acc,op,parseFloat(cur)):null;
+      exprEl.textContent=`${fmt(acc)} ${op} ${cur}`+(pv!=null?` = ${fmt(pv)}`:'');
+    } else {
+      exprEl.textContent=lastLine;
+    }
+    if(onChange) onChange();
+  }
+  function press(k){
+    if(k==='C'){ acc=null; op=null; cur=''; lastLine=''; }
+    else if(k==='⌫'){
+      if(cur) cur=cur.slice(0,-1);
+      else if(op!=null) op=null;
+      else { acc=null; lastLine=''; }
+    }
+    else if(k==='+'||k==='−'||k==='×'||k==='÷'){
+      if(cur===''&&acc==null) return;
+      if(cur!==''){
+        const n=parseFloat(cur);
+        acc = op!=null? calc(acc,op,n) : n;
+        cur='';
+      }
+      if(acc==null||!Number.isFinite(acc)) return;
+      op=k; lastLine='';
+    }
+    else if(k==='='){
+      if(cur===''||op==null) return;
+      const v=calc(acc,op,parseFloat(cur));
+      if(v==null) return;
+      lastLine=`${fmt(acc)} ${op} ${cur} = ${fmt(v)}`;
+      acc=v; cur=''; op=null;
+    }
+    else if(k==='.'){
+      if(cur.includes('.')) return;
+      cur = cur===''? '0.' : cur+'.';
+    }
+    else {
+      if(cur.includes('.')){
+        if(cur.split('.')[1].length>=2) return;
+      } else if(cur.length>=5) return;
+      cur = cur==='0'? k : cur+k;
+    }
+    render();
+  }
+  for(const item of KEYS){
+    const b=document.createElement('button');
+    b.type='button'; b.textContent=item[0]; b.style.gridArea=item[1];
+    if(item[2]) b.className=item[2];
+    b.setAttribute('aria-label', item[0]==='⌫'?'删除':item[0]);
+    b.onclick=()=>press(item[0]);
+    padEl.appendChild(b);
+  }
+  el.appendChild(exprEl); el.appendChild(padEl);
+  render();
+  return el;
+}
+
 // ===== 记账 =====
 function openAddBill(defaultLedger){
   const {close,body}=openSheet({title:'记一笔'});
@@ -652,7 +753,8 @@ function openAddBill(defaultLedger){
 
   // 金额
   const amtInput=document.createElement('input'); amtInput.className='amount-input';
-  amtInput.type='text'; amtInput.inputmode='decimal'; amtInput.placeholder='0.00';
+  amtInput.type='text'; amtInput.inputmode='none'; amtInput.placeholder='0.00';
+  amtInput.readOnly=true;
 
   const aaHint=document.createElement('p'); aaHint.className='aa-hint';
   function refreshTypeHint(){
@@ -712,6 +814,7 @@ function openAddBill(defaultLedger){
   const cny=document.createElement('span'); cny.className='amount-cny'; cny.textContent='¥';
   amountBox.appendChild(cny); amountBox.appendChild(amtInput);
   const amountWrap=makeField(null, amountBox, aaHint); amountWrap.classList.add('amount-block');
+  amountWrap.appendChild(buildCalc(amtInput, refreshTypeHint));
   body.appendChild(amountWrap);
 
   body.appendChild(makeField(makeLabel('备注'), noteInput));
